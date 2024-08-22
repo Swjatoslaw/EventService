@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Networking;
 
 public class EventService : MonoBehaviour
 {
@@ -55,7 +56,7 @@ public class EventService : MonoBehaviour
     #endregion
     
     #region engine methods
-
+    
     private async void Start()
     {
         await LoadStoredEventsAsync();
@@ -82,21 +83,21 @@ public class EventService : MonoBehaviour
         eventRegistry.Add(Guid.NewGuid().ToString(), newEvent);
 
         if (!isCooldownActive)
-            _ = CooldownAndSendEventsAsync();
+            CooldownAndSendEventsAsync().Forget();
     }
     
     #endregion
 
     #region service methods
 
-    private async Task CooldownAndSendEventsAsync()
+    private async UniTask CooldownAndSendEventsAsync()
     {
         isCooldownActive = true;
         int attemptsLeft = MAX_SEND_ATTEMPTS;
         
         while (eventRegistry.Count > 0 && attemptsLeft > 0)
         {
-            await Task.Delay(TimeSpan.FromSeconds(COOLDOWN_BEFORE_SEND));
+            await UniTask.Delay(TimeSpan.FromSeconds(COOLDOWN_BEFORE_SEND));
             await SendEventsToServerAsync();
             attemptsLeft--;
         }
@@ -104,7 +105,7 @@ public class EventService : MonoBehaviour
         isCooldownActive = false;
     }
 
-    private async Task SendEventsToServerAsync()
+    private async UniTask SendEventsToServerAsync()
     {
         EventList eventList = new EventList(eventRegistry.Values.ToList());
         string jsonData = JsonUtility.ToJson(eventList);
@@ -112,10 +113,16 @@ public class EventService : MonoBehaviour
 
         try
         {
-            StringContent content = new StringContent(jsonData, Encoding.UTF8, "application/json");
-            HttpResponseMessage response = await httpClient.PostAsync(SERVER_URL, content);
+            using UnityWebRequest request = new UnityWebRequest(SERVER_URL, UnityWebRequest.kHttpVerbPOST);
+            
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
 
-            if (response.IsSuccessStatusCode)
+            var response = await request.SendWebRequest();
+
+            if (response.result == UnityWebRequest.Result.Success)
             {
                 Debug.Log($"Events sent successfully: {jsonData}");
                 
@@ -126,7 +133,7 @@ public class EventService : MonoBehaviour
             }
             else
             {
-                Debug.LogError($"Failed to send events: {response.StatusCode}");
+                Debug.LogError($"Failed to send events: {response.error}");
                 SaveEvents();
             }
         }
@@ -137,7 +144,6 @@ public class EventService : MonoBehaviour
         }
     }
 
-
     private void SaveEvents()
     {
         EventList eventList = new EventList(eventRegistry.Values.ToList());
@@ -147,7 +153,7 @@ public class EventService : MonoBehaviour
         PlayerPrefs.Save();
     }
 
-    private async Task LoadStoredEventsAsync()
+    private async UniTask LoadStoredEventsAsync()
     {
         if (PlayerPrefs.HasKey(STORED_EVENTS_KEY))
         {
